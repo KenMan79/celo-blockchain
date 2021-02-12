@@ -17,6 +17,7 @@
 package core
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -71,6 +72,7 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		misc.ApplyDAOHardFork(statedb)
 	}
 
+	randStart := time.Now()
 	if random.IsRunning() {
 		author, err := p.bc.Engine().Author(header)
 		if err != nil {
@@ -84,6 +86,7 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		// always true (EIP158)
 		statedb.IntermediateRoot(true)
 	}
+	txStart := time.Now()
 	// Iterate over and process the individual transactions
 	for i, tx := range block.Transactions() {
 		statedb.Prepare(tx.Hash(), block.Hash(), i)
@@ -94,9 +97,12 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		receipts = append(receipts, receipt)
 		allLogs = append(allLogs, receipt.Logs...)
 	}
+	prepareStart := time.Now()
 	// Finalize the block, applying any consensus engine specific extras (e.g. block rewards)
 	statedb.Prepare(common.Hash{}, block.Hash(), len(block.Transactions()))
+	finalizeStart := time.Now()
 	p.engine.Finalize(p.bc, header, statedb, block.Transactions())
+	receiptsStart := time.Now()
 
 	if len(statedb.GetLogs(common.Hash{})) > 0 {
 		receipt := types.NewReceipt(nil, false, 0)
@@ -108,8 +114,25 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		}
 		receipts = append(receipts, receipt)
 	}
-	// TODO: Reduce this log level before merging
-	log.Warn("Finished processing block", "func", "Process", "duration", time.Since(start), "block", header.Number.Uint64(), "usedGas", *usedGas, "txCount", len(block.Transactions()))
+	done := time.Now()
+	nsDiff := func(a, b time.Time) int64 {
+		return b.Sub(a).Nanoseconds()
+	}
+	// TODO: Don't merge this.
+	// blockNumber,usedGas,txCount,startTime,randomTime,txTime,prepareTime,finalizeTime,receiptsTime,totalTime,duration
+	fmt.Printf("%v,%v,%v,%v,%v,%v,%v,%v,%v,%v,%v\n",
+		header.Number.Uint64(),
+		*usedGas,
+		len(block.Transactions()),
+		nsDiff(start, randStart),
+		nsDiff(randStart, txStart),
+		nsDiff(txStart, prepareStart),
+		nsDiff(prepareStart, finalizeStart),
+		nsDiff(finalizeStart, receiptsStart),
+		nsDiff(receiptsStart, done),
+		nsDiff(start, done),
+		done.Sub(start))
+	log.Trace("Finished processing block", "func", "Process", "duration", time.Since(start), "block", header.Number.Uint64(), "usedGas", *usedGas, "txCount", len(block.Transactions()))
 	return receipts, allLogs, *usedGas, nil
 }
 
